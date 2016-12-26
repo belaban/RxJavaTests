@@ -1,3 +1,5 @@
+package org.test;
+
 import rx.Observable;
 
 public class Test {
