@@ -9,10 +9,14 @@ import rx.Single;
 import rx.Subscriber;
 import rx.functions.Func1;
 import rx.observables.ConnectableObservable;
+import rx.observables.GroupedObservable;
 import rx.observers.TestSubscriber;
 import rx.schedulers.Schedulers;
 import rx.subjects.PublishSubject;
 
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +30,98 @@ import static rx.Observable.timer;
 @Test(singleThreaded=true)
 public class Tests {
     protected static final long START=System.currentTimeMillis();
+
+
+    public void from() {
+
+        String[] strings={"hello", "world", "from", "bela"};
+
+        Observable<String> obs=Observable.from(strings);
+
+        obs.subscribe(System.out::println);
+    }
+
+    public void wordCount() throws Exception {
+        // URL url=new URL("http://www.gutenberg.org/ebooks/218.txt.utf-8");
+        Observable<String> obs=Observable.create(s -> {
+            BufferedReader in=null;
+            try {
+                in=new BufferedReader(new InputStreamReader(new FileInputStream("/home/bela/DeBelloGallicum.txt")));
+                String inputLine;
+                while((inputLine=in.readLine()) != null)
+                    if(!inputLine.isEmpty())
+                        s.onNext(inputLine);
+                s.onCompleted();
+            }
+            catch(Throwable ex) {
+                s.onError(ex);
+            }
+            finally {
+                Util.close(in);
+            }
+        });
+
+        /*Observable<Map<String,Integer>> obs2=obs
+          .flatMap(line -> Observable.from(line.split("\\s+")))
+          .filter(s -> s != null && !s.isEmpty())
+          .reduce(new HashMap<>(),
+                  (map,key) -> {
+                      Integer val=map.get(key);
+                      if(val == null)
+                          map.put(key, 1);
+                      else
+                          map.put(key, val +1);
+                      return map;
+                  });
+
+        obs2.subscribe(map -> {
+            for(Map.Entry<String,Integer> entry: map.entrySet())
+                System.out.printf("%s: %d\n", entry.getKey(), entry.getValue());
+        });
+*/
+        obs
+          .flatMap(line -> Observable.from(line.split("\\s+")))
+          .groupBy(String::toLowerCase)
+          .flatMap(this::count)
+          .filter(cnt -> cnt.num > 0)
+          .toSortedList()
+          .subscribe(System.out::println);
+
+        //Util.sleep(3000);
+    }
+
+    private Observable<Count> count(GroupedObservable<String, String> group) {
+        return group.scan(new Count(group.getKey()),
+                          (count, string) -> count.incr()
+        );
+    }
+
+    protected class Count implements Comparable<Count> {
+        protected final String key;
+        protected int num;
+
+        public Count(String key) {
+            this.key=key;
+        }
+
+        public Count incr() {num++; return this;}
+
+        public String toString() {
+            return String.format("%s: %d", key, num);
+        }
+
+        public int compareTo(Count o) {
+            return Integer.compare(num, o.num);
+        }
+    }
+
+
+    public void groupBy() {
+        Observable.range(1, 100).map(i -> Util.random(20))
+          .groupBy(g -> g)
+          .subscribe(el -> System.out.println("el = " + el.getKey()));
+    }
+
 
     public void merge() {
         Observable<Integer> obs1=Observable.range(1, 5).delay(300, MILLISECONDS)
