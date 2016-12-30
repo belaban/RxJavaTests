@@ -3,10 +3,7 @@ package org.test;
 import org.jgroups.util.Tuple;
 import org.jgroups.util.Util;
 import org.testng.annotations.Test;
-import rx.Completable;
-import rx.Observable;
-import rx.Single;
-import rx.Subscriber;
+import rx.*;
 import rx.functions.Func1;
 import rx.observables.ConnectableObservable;
 import rx.observables.GroupedObservable;
@@ -19,6 +16,7 @@ import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
@@ -30,6 +28,38 @@ import static rx.Observable.timer;
 @Test(singleThreaded=true)
 public class Tests {
     protected static final long START=System.currentTimeMillis();
+
+    public void single2() {
+        Single<Integer> single=Single.just(100);
+        System.out.println("single = " + single);
+        single.subscribe(num -> System.out.println("num = " + num));
+    }
+
+    public void completableFutureToObserver() {
+        Observable<String> obs=Observable.defer(() ->
+                                                  from(CompletableFuture.supplyAsync(() -> {
+                                                      log("sleeping for 1 s");
+                                                      Util.sleep(1000);
+                                                      return "hello world";
+                                                  })));
+
+        Util.sleep(500);
+        log("subscribing");
+        obs.subscribe(s -> log("s = " + s));
+
+        Util.sleep(2000);
+    }
+
+    protected static <T> Observable<T> from(CompletableFuture<T> future) {
+        return Observable.create(s -> future.whenComplete((r, ex) -> {
+            if(ex != null)
+                s.onError(ex);
+            else {
+                s.onNext(r);
+                s.onCompleted();
+            }
+        }));
+    }
 
 
     public void from() {
