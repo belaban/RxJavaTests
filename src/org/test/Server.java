@@ -1,21 +1,13 @@
 package org.test;
 
 
-import io.netty.handler.codec.LineBasedFrameDecoder;
-import io.netty.handler.codec.string.StringDecoder;
-import io.reactivex.netty.protocol.tcp.server.TcpServer;
-import org.jgroups.util.Util;
-import rx.Observable;
-
-import static io.netty.util.CharsetUtil.UTF_8;
-
 /**
  * rxnetty based server
  * @author Bela Ban
  * @since x.y
  */
 public class Server {
-    protected TcpServer<String,String> srv;
+   /* protected TcpServer<String,String> srv;
     protected static final double CONVERSION=1.06448;
 
     protected void start(int port) {
@@ -48,5 +40,5 @@ public class Server {
 
     public static void main(String[] args) {
         new Server().start(args.length > 0? Integer.valueOf(args[0]) : 8080);
-    }
+    }*/
 }

@@ -1,5 +1,6 @@
 package org.test;
 
+
 import org.jgroups.util.Tuple;
 import org.jgroups.util.Util;
 import org.testng.annotations.Test;
@@ -17,7 +18,10 @@ import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -28,6 +32,305 @@ import static rx.Observable.timer;
 @Test(singleThreaded=true)
 public class Tests {
     protected static final long START=System.currentTimeMillis();
+
+    public void toBlocking() {
+        List<Integer> list=Observable.range(1, 10)
+          .toList()
+          .toBlocking()
+          .single();
+        System.out.println("list = " + list);
+    }
+
+
+    public void backPressure4() {
+        Observable<Integer> obs=Observable.create(new MyRange(1, 250));
+        obs.subscribe(new Subscriber<Integer>() {
+
+            public void onStart() {
+                request(3);
+            }
+
+            public void onCompleted() {
+
+            }
+
+            public void onError(Throwable e) {
+
+            }
+
+            public void onNext(Integer integer) {
+                System.out.println("integer = " + integer);
+                request(1);
+            }
+        });
+    }
+
+
+    protected static class MyRange implements Observable.OnSubscribe<Integer> {
+        protected final int from , to;
+
+
+        public MyRange(int from, int to) {
+            this.from=from;
+            this.to=to;
+        }
+
+        public void call(Subscriber<? super Integer> child) {
+            child.setProducer(new MyRangeImpl(child, from, to));
+        }
+    }
+
+    protected static class MyRangeImpl implements Producer {
+        protected Subscriber<? super Integer> sub;
+        protected int from, to;
+        protected boolean done, processing;
+        protected int requested=0;
+
+        public MyRangeImpl(Subscriber<? super Integer> subscriber, int from, int to) {
+            this.sub=subscriber;
+            this.from=from;
+            this.to=to;
+        }
+
+        public void request(long n) {
+            requested+=n;
+            System.out.printf("requested %d, requests left: %d\n", n, requested);
+            if(processing)
+                return;
+
+            processing=true;
+            while(requested > 0 && from <= to) {
+                requested--;
+                sub.onNext(from++);
+            }
+            processing=false;
+            if(from >= to && !done) {
+                done=true;
+                sub.onCompleted();
+            }
+        }
+    }
+
+
+    public void backPressure3() {
+        Observable<Dish> dishes=Observable
+          .range(1, 1_000)
+          /*.<Integer>create(s -> {
+              for(int i=0; i < 1000; i++) {
+                  s.onNext(i);
+              }
+              s.onCompleted();
+          })*/
+          .map(Dish::new);
+
+
+          dishes
+            .observeOn(Schedulers.io())
+            .subscribe(new Subscriber<Dish>() {
+                public void onStart() {
+                    request(3);
+                }
+
+                public void onCompleted() {
+                }
+
+                public void onError(Throwable e) {
+                    e.printStackTrace(System.err);
+                }
+
+                public void onNext(Dish d) {
+                    log("washing " + d.id);
+                    Util.sleep(50);
+                    request(1);
+                }
+            });
+
+
+
+        Util.sleep(10000);
+    }
+
+
+    protected class Dish {
+        protected final int    id;
+        protected final byte[] buf=new byte[1024];
+
+        public Dish(int id) {
+            this.id=id;
+            log("created " + id);
+        }
+
+        public String toString() {
+            return String.valueOf(id);
+        }
+    }
+
+    public void fromEmitter() {
+        Observable<Integer> obs=Observable.fromEmitter(emitter -> {
+            for(int i=1; i <= 100; i++) {
+                emitter.onNext(i);
+                log(String.format("i=%d, requested=%d", i, emitter.requested()));
+            }
+            emitter.onCompleted();
+        }, Emitter.BackpressureMode.BUFFER);
+
+
+        obs
+          .observeOn(Schedulers.io())
+          .subscribeOn(Schedulers.io())
+          .subscribe(new Subscriber<Integer>() {
+              Producer prod;
+
+            public void onStart() {
+                request(1);
+            }
+
+            public void onCompleted() {
+
+            }
+
+            public void onError(Throwable e) {
+                System.err.printf("error: %s", e);
+            }
+
+            public void onNext(Integer integer) {
+                log("integer = " + integer);
+                Util.sleep(100);
+                request(1);
+            }
+
+          });
+
+        Util.sleep(5000);
+    }
+
+
+    public void backPressure2() {
+        Observable<Integer> obs=Observable.create(s -> {
+            new Thread(() -> {
+                for(int i=1; i <= 100; i++) {
+                    s.onNext(i);
+                }
+                s.onCompleted();
+                log("observable is done");
+            }).start();
+        });
+
+        obs
+          .onBackpressureBuffer(10, () -> System.err.printf("bad: overflow!!!"))
+          .subscribeOn(Schedulers.io())
+          .subscribe(new Subscriber<Integer>() {
+
+            public void onStart() {
+                request(1);
+            }
+
+            public void onCompleted() {
+
+            }
+
+            public void onError(Throwable e) {
+                System.err.printf("error: %s", e);
+            }
+
+            public void onNext(Integer integer) {
+                log("integer = " + integer);
+                Util.sleep(100);
+                request(1);
+            }
+        });
+
+        Util.sleep(5000);
+    }
+
+
+    protected class MyObservable<T> extends Observable<T> {
+        protected final int from, to;
+
+        /**
+         * Creates an Observable with a Function to execute when it is subscribed to.
+         * <p>
+         * <em>Note:</em> Use {@link #create(OnSubscribe)} to create an Observable, instead of this constructor,
+         * unless you specifically have a need for inheritance.
+         * @param f {@link OnSubscribe} to be executed when {@link #subscribe(Subscriber)} is called
+         * @param from
+         * @param to
+         */
+        protected MyObservable(OnSubscribe<T> f, int from, int to) {
+            super(f);
+            this.from=from;
+            this.to=to;
+        }
+
+
+
+
+    }
+
+
+
+    public void window() {
+        Observable<Integer> obs=Observable.create(s -> {
+            for(int i=1; i <= 10; i++) {
+                s.onNext(i);
+                Util.sleep(100);
+            }
+            s.onCompleted();
+        });
+        obs.window(Observable.empty(),
+                   num -> Observable.empty().delay(500, MILLISECONDS))
+          .flatMap(m -> m)
+          .subscribe(System.out::println);
+
+
+        Util.sleep(2000);
+    }
+
+    public void throttleWithTimeout() {
+        Observable<Integer> obs=Observable.create(s -> {
+            for(int i=1; i <= 10; i++) {
+                s.onNext(i);
+                Util.sleep(800);
+            }
+            s.onCompleted();
+        });
+
+        obs.throttleFirst(2, SECONDS)
+          .subscribe(System.out::println);
+
+        //obs.throttleWithTimeout(1, SECONDS)
+          //.subscribe(System.out::println);
+    }
+
+
+    public void backPressure() throws Exception {
+        final byte[] buf=new byte[10000];
+        final CountDownLatch latch=new CountDownLatch(1);
+        final AtomicInteger  count=new AtomicInteger(0);
+        final AtomicLong     bytes=new AtomicLong(0);
+
+        Observable.<byte[]>create(s -> {
+            for(int i=0; i < 1_000_000; i++)
+                s.onNext(buf);
+            log("observable is done");
+            s.onCompleted();
+            latch.countDown();
+        })
+          .observeOn(Schedulers.io())
+          .subscribe(num -> {
+                         // create some delay in consuming the stream
+                         Util.sleep(1);
+                         if(count.incrementAndGet() % 1000 == 0)
+                             log(String.format("count: %d, bytes: %s\n", count.get(), Util.printBytes(bytes.get())));
+                         bytes.addAndGet(num.length);
+                     },
+                     ex -> System.err.printf("exception: %s\n", ex.toString())
+          );
+
+        latch.await();
+        System.out.printf("\n\ncount=%d, bytes=%s\n", count.get(), Util.printBytes(bytes.get()));
+
+    }
 
     public void single2() {
         Single<Integer> single=Single.just(100);
@@ -186,7 +489,7 @@ public class Tests {
     }
 
     public void flatMapConcurrent() {
-        Observable<String> obs1=Observable.defer(() -> Observable.just(findFlight()));
+        Observable<String> obs1=Observable.defer(() -> just(findFlight()));
         obs1.flatMap(flight -> Observable.fromCallable(() -> new Tuple(flight, findCar())).subscribeOn(Schedulers.io()))
           .subscribe(booking -> System.out.printf("booking: %s (class: %s)\n", booking, booking.getClass().getSimpleName()));
     }
@@ -222,7 +525,7 @@ public class Tests {
     }
 
     public void defer() {
-        Observable<List<String>> obs=Observable.defer(() -> Observable.just(findPeople()));
+        Observable<List<String>> obs=Observable.defer(() -> just(findPeople()));
 
         obs.flatMap(Observable::from).toBlocking().subscribe(p -> System.out.println("p = " + p));
     }
@@ -234,7 +537,7 @@ public class Tests {
 
 
     public void lift() {
-        Observable<Integer> obs=Observable.just("one", "two", "three", "four")
+        Observable<Integer> obs=just("one", "two", "three", "four")
           .lift(new Mapper<>(String::length));
         //.lift(new MyMapper());
 
@@ -294,7 +597,7 @@ public class Tests {
     public void compose() {
 
 
-        Observable<Integer> obs=Observable.just("one", "two", "three", "four")
+        Observable<Integer> obs=just("one", "two", "three", "four")
           .compose(length());
 
         obs.subscribe(i -> System.out.println("i = " + i));
@@ -328,8 +631,8 @@ public class Tests {
     }
 
     public void zip() {
-        Observable<Integer>obs1=Observable.just(1, 2, 3, 4, 5);
-        Observable<String> obs2=Observable.just("A", "B", "C", "D", "E", "F");
+        Observable<Integer>obs1=just(1, 2, 3, 4, 5);
+        Observable<String> obs2=just("A", "B", "C", "D", "E", "F");
 
         Observable.zip(obs1,obs2, (n,s) -> String.format("%d%s", n,s))
           .subscribe(el -> System.out.printf("%s\n", el));
@@ -355,13 +658,13 @@ public class Tests {
     }
 
     public void multipleObservables() {
-        Observable<Integer> o1=Observable.just(1,2,3,4,5)
+        Observable<Integer> o1=just(1, 2, 3, 4, 5)
           .delay(num -> timer(num*100, MILLISECONDS));
 
-        Observable<Integer> o2=Observable.just(1,2,3,4,5)
+        Observable<Integer> o2=just(1, 2, 3, 4, 5)
                   .delay(num -> timer(num*200, MILLISECONDS));
 
-        Observable<Integer> o3=Observable.just(1,2,3,4,5)
+        Observable<Integer> o3=just(1, 2, 3, 4, 5)
                   .delay(num -> timer(num*500, MILLISECONDS));
 
         Observable.merge(o1, o2, o3)
@@ -373,7 +676,7 @@ public class Tests {
 
 
     public void concatMap() {
-        Observable<Long> obs=Observable.just(5L, 1L, 3L, 2L)
+        Observable<Long> obs=just(5L, 1L, 3L, 2L)
           .concatMap(n -> just(n).delay(n, SECONDS));
 
         obs.subscribe(System.out::println);
